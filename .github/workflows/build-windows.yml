@@ -1,0 +1,98 @@
+# Session 138, 30 October 2026: the Windows app is built here, on GitHub's
+# free machine for public repos, because the private repo's cloud minutes ran
+# out. The source is checked out with a read-only key and never kept here:
+# every line the build prints goes to a file on a draft release (drafts are
+# seen only by the owner), and the installer goes on a draft release too,
+# where app/scripts/release-windows.sh takes it from. Then the new installer
+# is put through a person's first day on this same PC.
+name: build windows
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit of korture-ai-human to build
+        default: main
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          repository: skprasad-korture/korture-ai-human
+          ref: ${{ inputs.ref }}
+          ssh-key: ${{ secrets.SOURCE_KEY }}
+          path: src
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build, every line kept private
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          log="$RUNNER_TEMP/build.log"
+          (cd src && git log -1 --format='%h %s' && npm ci && cd app && npx tauri build --bundles nsis) > "$log" 2>&1
+          code=$?
+          exe=$(ls src/app/src-tauri/target/release/bundle/nsis/*.exe 2>/dev/null | head -1)
+          gh release create "build-${{ github.run_id }}" --draft --title "Windows build, run ${{ github.run_id }}" --notes "Private build of ${{ inputs.ref }}." "$log" ${exe:+"$exe"} > /dev/null
+          echo "build exit $code, installer: ${exe:+yes}"
+          [ $code -eq 0 ] && [ -n "$exe" ]
+      - name: The new installer, installed for this person only
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem src/app/src-tauri/target/release/bundle/nsis -Filter *.exe | Select-Object -First 1
+          Start-Process $exe.FullName -ArgumentList '/S' -Wait
+          Remove-Item -Recurse -Force src
+          $dir = Join-Path $env:LOCALAPPDATA 'Korture Sense'
+          & (Join-Path $dir 'runtime\node.exe') (Join-Path $dir 'runtime\bin\korture.mjs') --version 2>&1 | Write-Host
+          irm https://claude.ai/install.ps1 | iex *> $null
+          npm install -g @openai/codex *> $null
+          "$env:USERPROFILE\.local\bin" | Out-File -Append $env:GITHUB_PATH
+      - name: Sign in to Claude, the way the app runs it
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:LOCALAPPDATA 'Korture Sense'
+          $node = Join-Path $dir 'runtime\node.exe'; $k = Join-Path $dir 'runtime\bin\korture.mjs'
+          & $node $k get-ready claude
+          Start-Sleep -Seconds 20
+          Get-ChildItem $env:TEMP -Filter 'korture-get-ready-*.json' | ForEach-Object { $j = Get-Content $_.FullName -Raw | ConvertFrom-Json; Write-Host "claude: work=$($j.claude.work) error=$($j.claude.error) address kept=$([bool]$j.claude.url) $(if ($j.claude.url) { $j.claude.url.Substring(0, 40) })" }
+          $r = & $node $k ready | ConvertFrom-Json
+          $c = $r | Where-Object id -eq 'claude'
+          Write-Host "the screen gets: step=$($c.step) work=$($c.work) url=$([bool]$c.url)"
+          Write-Host "browser windows: $((Get-Process msedge -ErrorAction SilentlyContinue | Where-Object MainWindowTitle | Measure-Object).Count)"
+      - name: A person with no chats yet, then their first chat, read by the minute task
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:LOCALAPPDATA 'Korture Sense'
+          $home2 = Join-Path $env:USERPROFILE '.korture'
+          New-Item -ItemType Directory -Force (Join-Path $home2 'sense') | Out-Null
+          '{"allowance":"little"}' | Set-Content (Join-Path $home2 'sense\settings.json')
+          Copy-Item (Join-Path $dir 'runtime') (Join-Path $home2 'runtime') -Recurse
+          $rt = Join-Path $home2 'runtime'; $node = Join-Path $rt 'node.exe'; $k = Join-Path $rt 'bin\korture.mjs'
+          & $node $k install --no-app --reader codex *> (Join-Path $home2 'setup.log')
+          Write-Host "HOME is set: $([bool]$env:HOME)"
+          Start-Sleep -Seconds 75
+          Write-Host "== no chats: $(Get-Content (Join-Path $home2 'sense\progress.json') -Raw)"
+          schtasks /Query /TN "Korture Sense\com.korture.ai-reader" /V /FO LIST | Select-String 'Task To Run|Last Run|Last Result' | Out-String | Write-Host
+          $c = Join-Path $env:USERPROFILE '.claude\projects\C--work-app'
+          New-Item -ItemType Directory -Force $c | Out-Null
+          $now = (Get-Date).ToUniversalTime()
+          $lines = @(
+            (@{ type = 'user'; uuid = 'u1'; sessionId = 's1'; cwd = 'C:\work\app'; timestamp = $now.AddMinutes(-30).ToString('o'); message = @{ role = 'user'; content = 'make the tray icon open the panel, and tell me what you changed' } } | ConvertTo-Json -Compress -Depth 5),
+            (@{ type = 'assistant'; uuid = 'a1'; sessionId = 's1'; timestamp = $now.AddMinutes(-29).ToString('o'); message = @{ role = 'assistant'; content = @(@{ type = 'text'; text = 'Done.' }) } } | ConvertTo-Json -Compress -Depth 5),
+            (@{ type = 'user'; uuid = 'u2'; sessionId = 's1'; cwd = 'C:\work\app'; timestamp = $now.AddMinutes(-20).ToString('o'); message = @{ role = 'user'; content = 'now check it works on a small screen before you say it is done' } } | ConvertTo-Json -Compress -Depth 5)
+          )
+          [IO.File]::WriteAllLines((Join-Path $c 'chat-1.jsonl'), $lines)
+          Start-Sleep -Seconds 150
+          Write-Host "== with a chat: $(Get-Content (Join-Path $home2 'sense\progress.json') -Raw)"
+          schtasks /Query /TN "Korture Sense\com.korture.ai-reader" /V /FO LIST | Select-String 'Last Run|Last Result' | Out-String | Write-Host
+          foreach ($f in 'sense\health.json','sense\reading.md') { $p = Join-Path $home2 $f; Write-Host "== $f"; if (Test-Path $p) { (Get-Content $p -Raw).Substring(0, [Math]::Min(500, (Get-Content $p -Raw).Length)) | Write-Host } else { Write-Host missing } }
