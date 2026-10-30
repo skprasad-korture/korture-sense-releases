@@ -1,0 +1,113 @@
+# A person's first day on a PC, run by hand (session 138, 30 October 2026).
+# Runs here, in the public releases repo, on GitHub's free Windows machine;
+# it uses only the public installer and the makers' own installers.
+# Shishir, 0.1.111: the Claude sign-in click did nothing, and with ChatGPT
+# the reading screen stayed at "0% Finding your work". This installs the
+# public installer the way a person does, then runs the steps the app runs
+# on each click, and prints what each one left on disk.
+name: first day on a PC
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Windows release to install
+        default: "0.1.111"
+permissions:
+  contents: read
+jobs:
+  first-day:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: The public installer, installed for this person only
+        shell: pwsh
+        run: |
+          $url = "https://github.com/skprasad-korture/korture-sense-releases/releases/download/windows-v${{ inputs.version }}/Korture-Sense-Setup.exe"
+          Invoke-WebRequest $url -OutFile setup.exe
+          Start-Process .\setup.exe -ArgumentList '/S' -Wait
+          $dir = Join-Path $env:LOCALAPPDATA 'Korture Sense'
+          Get-ChildItem $dir | Select-Object Name | Out-String | Write-Host
+      - name: Claude Code and Codex, the way the makers install them
+        shell: pwsh
+        run: |
+          irm https://claude.ai/install.ps1 | iex 2>&1 | Select-Object -Last 5 | Write-Host
+          npm install -g @openai/codex 2>&1 | Select-Object -Last 3 | Write-Host
+          "$env:USERPROFILE\.local\bin" | Out-File -Append $env:GITHUB_PATH
+          Get-ChildItem "$env:USERPROFILE\.local\bin" -ErrorAction SilentlyContinue | Select-Object Name | Out-String | Write-Host
+      - name: Your work, with no chats on this PC
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:LOCALAPPDATA 'Korture Sense'
+          $node = Join-Path $dir 'runtime\node.exe'; $k = Join-Path $dir 'runtime\bin\korture.mjs'
+          & $node $k found
+          & $node $k ready
+      - name: Click Sign in for Claude, the way the app runs it
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:LOCALAPPDATA 'Korture Sense'
+          $node = Join-Path $dir 'runtime\node.exe'; $k = Join-Path $dir 'runtime\bin\korture.mjs'
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          $out = & $node $k get-ready claude 2>&1
+          Write-Host "get-ready answered in $([int]$sw.Elapsed.TotalSeconds) s: $out"
+          Start-Sleep -Seconds 20
+          Get-ChildItem $env:TEMP -Filter 'korture-get-ready-*.json' | ForEach-Object { Write-Host "$($_.Name): $(Get-Content $_.FullName -Raw)" }
+          Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'claude|msedge|chrome|get-ready' } | Select-Object ProcessId, Name, @{n='cmd';e={$_.CommandLine.Substring(0,[Math]::Min(220,$_.CommandLine.Length))}} | Format-Table -Wrap | Out-String -Width 300 | Write-Host
+          & $node $k ready
+      - name: The sign-in worker in the open, its own words
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:LOCALAPPDATA 'Korture Sense'
+          $node = Join-Path $dir 'runtime\node.exe'; $k = Join-Path $dir 'runtime\bin\korture.mjs'
+          $before = Get-Process | Select-Object -ExpandProperty Id
+          $p = Start-Process $node -ArgumentList @("`"$k`"", 'get-ready', 'claude', '--work') -RedirectStandardOutput w.out -RedirectStandardError w.err -PassThru -NoNewWindow
+          Start-Sleep -Seconds 40
+          Write-Host "worker running: $(-not $p.HasExited) exit: $($p.ExitCode)"
+          Get-Content w.out, w.err -ErrorAction SilentlyContinue | Write-Host
+          Get-CimInstance Win32_Process | Where-Object { $before -notcontains $_.ProcessId } | Select-Object ProcessId, Name, @{n='cmd';e={ if ($_.CommandLine) { $_.CommandLine.Substring(0,[Math]::Min(260,$_.CommandLine.Length)) } }} | Format-Table -Wrap | Out-String -Width 400 | Write-Host
+          Get-ChildItem $env:TEMP -Filter 'korture-get-ready-*.json' | ForEach-Object { Write-Host "$($_.Name): $(Get-Content $_.FullName -Raw)" }
+          if (-not $p.HasExited) { taskkill /pid $p.Id /T /F | Out-Null }
+      - name: Start reading with ChatGPT, the way the app runs it
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:LOCALAPPDATA 'Korture Sense'
+          $node = Join-Path $dir 'runtime\node.exe'
+          $home2 = Join-Path $env:USERPROFILE '.korture'
+          New-Item -ItemType Directory -Force (Join-Path $home2 'sense') | Out-Null
+          '{"allowance":"little"}' | Set-Content (Join-Path $home2 'sense\settings.json')
+          Copy-Item (Join-Path $dir 'runtime') (Join-Path $home2 'runtime') -Recurse
+          $rt = Join-Path $home2 'runtime'
+          $p = Start-Process (Join-Path $rt 'node.exe') -ArgumentList @("`"$rt\bin\korture.mjs`"", 'install', '--no-app', '--reader', 'codex') -WorkingDirectory $rt -RedirectStandardOutput (Join-Path $home2 'setup.log') -RedirectStandardError (Join-Path $home2 'setup.err') -PassThru -NoNewWindow
+          if (-not $p.WaitForExit(300000)) { Write-Host "install still running after 5 minutes" }
+          Write-Host "install exit: $($p.ExitCode)"
+          Get-Content (Join-Path $home2 'setup.log') | Write-Host
+          Get-Content (Join-Path $home2 'setup.err') -ErrorAction SilentlyContinue | Write-Host
+          schtasks /Query /TN "Korture Sense\" /V /FO LIST 2>&1 | Select-String 'TaskName|Status|Last Run|Last Result|Task To Run' | Out-String | Write-Host
+      - name: The minute task, three minutes later
+        shell: pwsh
+        run: |
+          Start-Sleep -Seconds 180
+          $home2 = Join-Path $env:USERPROFILE '.korture'
+          schtasks /Query /TN "Korture Sense\" /V /FO LIST 2>&1 | Select-String 'TaskName|Status|Last Run|Last Result' | Out-String | Write-Host
+          foreach ($f in 'sense\progress.json','sense\current.json','sense\reading.md','sense\usage.json','sense\presence.json') {
+            $path = Join-Path $home2 $f
+            if (Test-Path $path) { Write-Host "== $f"; Get-Content $path -Raw | Write-Host } else { Write-Host "== $f missing" }
+          }
+          $log = Join-Path $home2 'sense\service.log'
+          if (Test-Path $log) { Write-Host "== service.log"; Get-Content $log -Tail 60 | Write-Host } else { Write-Host "== service.log missing" }
+          Get-ChildItem $home2 -Recurse -Depth 2 | Select-Object FullName, Length | Out-String -Width 300 | Write-Host
+      - name: A made-up chat, then the reading once by hand, its own words
+        shell: pwsh
+        run: |
+          $home2 = Join-Path $env:USERPROFILE '.korture'
+          $rt = Join-Path $home2 'runtime'
+          $c = Join-Path $env:USERPROFILE '.claude\projects\C--work-app'
+          New-Item -ItemType Directory -Force $c | Out-Null
+          $now = (Get-Date).ToUniversalTime()
+          $lines = @(
+            (@{ type = 'user'; uuid = 'u1'; sessionId = 's1'; cwd = 'C:\work\app'; timestamp = $now.AddMinutes(-30).ToString('o'); message = @{ role = 'user'; content = 'make the tray icon open the panel, and tell me what you changed' } } | ConvertTo-Json -Compress -Depth 5),
+            (@{ type = 'assistant'; uuid = 'a1'; sessionId = 's1'; timestamp = $now.AddMinutes(-29).ToString('o'); message = @{ role = 'assistant'; content = @(@{ type = 'text'; text = 'Done.' }) } } | ConvertTo-Json -Compress -Depth 5),
+            (@{ type = 'user'; uuid = 'u2'; sessionId = 's1'; cwd = 'C:\work\app'; timestamp = $now.AddMinutes(-20).ToString('o'); message = @{ role = 'user'; content = 'now check it works on a small screen before you say it is done' } } | ConvertTo-Json -Compress -Depth 5)
+          )
+          [IO.File]::WriteAllLines((Join-Path $c 'chat-1.jsonl'), $lines)
+          & (Join-Path $rt 'node.exe') (Join-Path $rt 'bin\korture.mjs') read 2>&1 | Select-Object -Last 40 | Write-Host
+          Write-Host "== progress.json"; Get-Content (Join-Path $home2 'sense\progress.json') -Raw -ErrorAction SilentlyContinue | Write-Host
