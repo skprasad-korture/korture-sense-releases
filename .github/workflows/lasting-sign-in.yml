@@ -1,0 +1,41 @@
+# Session 138: how `claude setup-token` (Claude Code's one-year sign-in)
+# finishes: does its page come back to this computer by itself, or does the
+# person paste a code? No one signs in here; only the address and the screen
+# are read.
+name: lasting sign-in
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  look:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - run: |
+          curl -fsSL https://claude.ai/install.sh | bash > /dev/null 2>&1
+          printf '#!/bin/sh\necho "$@" > "%s/took.txt"\n' "$PWD" > took.sh && chmod +x took.sh
+          export BROWSER="$PWD/took.sh"
+          python3 - <<'PY'
+          import os, pty, select, time, re, struct, fcntl, termios
+          pid, fd = pty.fork()
+          if pid == 0:
+              os.execv(os.path.expanduser("~/.local/bin/claude"), ["claude", "setup-token"])
+          fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 220, 0, 0))
+          buf, end = "", time.time() + 25
+          while time.time() < end:
+              r, _, _ = select.select([fd], [], [], 1)
+              if r:
+                  try: c = os.read(fd, 65536).decode("utf8", "replace")
+                  except OSError: break
+                  buf += c
+                  if "\x1b[6n" in c: os.write(fd, b"\x1b[1;1R")
+          text = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[=>]", "", buf)
+          print("SCREEN:")
+          for l in text.splitlines():
+              l = l.strip()
+              if l: print("  ", re.sub(r"(code_challenge|state)=[^&\s]+", r"\1=...", l)[:240])
+          PY
+          echo "BROWSER got: $(sed -E 's/(code_challenge|state)=[^&]+/\1=.../g' took.txt 2>/dev/null)"
