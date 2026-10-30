@@ -1,0 +1,30 @@
+# Session 138: what Claude Code says when its sign-in starts with no
+# terminal, and whether it opens the page through BROWSER when that is set.
+name: sign-in address
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  pc:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - shell: pwsh
+        run: |
+          irm https://claude.ai/install.ps1 | iex *> $null
+          $claude = "$env:USERPROFILE\.local\bin\claude.exe"
+          Write-Host "== plain, output to files"
+          $p = Start-Process $claude -ArgumentList 'auth','login','--claudeai' -RedirectStandardOutput a.out -RedirectStandardError a.err -PassThru -NoNewWindow
+          Start-Sleep -Seconds 12
+          Get-Content a.out, a.err -ErrorAction SilentlyContinue | Write-Host
+          taskkill /pid $p.Id /T /F *> $null
+          Get-Process msedge -ErrorAction SilentlyContinue | Stop-Process -Force
+          Write-Host "== with BROWSER set to a script that writes down the address"
+          Set-Content took.cmd "@echo %* > `"$PWD\took.txt`""
+          $env:BROWSER = "$PWD\took.cmd"
+          $p = Start-Process $claude -ArgumentList 'auth','login','--claudeai' -RedirectStandardOutput b.out -RedirectStandardError b.err -PassThru -NoNewWindow
+          Start-Sleep -Seconds 12
+          Get-Content b.out, b.err -ErrorAction SilentlyContinue | Write-Host
+          Write-Host "took.txt: $(Get-Content took.txt -Raw -ErrorAction SilentlyContinue)"
+          Write-Host "edge windows: $((Get-Process msedge -ErrorAction SilentlyContinue | Measure-Object).Count)"
+          taskkill /pid $p.Id /T /F *> $null
