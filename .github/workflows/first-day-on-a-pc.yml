@@ -111,3 +111,29 @@ jobs:
           [IO.File]::WriteAllLines((Join-Path $c 'chat-1.jsonl'), $lines)
           & (Join-Path $rt 'node.exe') (Join-Path $rt 'bin\korture.mjs') read 2>&1 | Select-Object -Last 40 | Write-Host
           Write-Host "== progress.json"; Get-Content (Join-Path $home2 'sense\progress.json') -Raw -ErrorAction SilentlyContinue | Write-Host
+      - name: Why the store failed, from the store itself
+        if: always()
+        shell: pwsh
+        run: |
+          $home2 = Join-Path $env:USERPROFILE '.korture'
+          $rt = Join-Path $home2 'runtime'
+          $node = Join-Path $rt 'node.exe'
+          Set-Content probe.mjs @'
+          import { DatabaseSync } from "node:sqlite";
+          import { pathToFileURL } from "node:url";
+          import { join } from "node:path";
+          const home = process.argv[2], rt = process.argv[3];
+          try {
+            const db = new DatabaseSync(join(home, "korture.db"));
+            for (const r of db.prepare("SELECT key, substr(value, 1, 900) AS v FROM state WHERE key LIKE '%fault%' OR key LIKE '%refresh%' OR key LIKE '%health%' OR key LIKE '%cooldown%'").all()) console.log("state", r.key, r.v);
+            console.log("tables", db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((t) => t.name).join(" "));
+          } catch (e) { console.log("db", e.stack); }
+          process.env.KORTURE_HOME = home;
+          try {
+            const b = await import(pathToFileURL(join(rt, "sense", "db", "build.js")).href);
+            console.log("build", JSON.stringify(b.build({ log: (l) => console.log("  log", l) })));
+          } catch (e) { console.log("build failed:", e.stack); }
+          '@
+          & $node probe.mjs $home2 $rt 2>&1 | Write-Host
+          Write-Host "== found"; & $node (Join-Path $rt 'bin\korture.mjs') found 2>&1 | Write-Host
+          Get-ChildItem (Join-Path $env:USERPROFILE '.claude\projects') -Recurse | Select-Object FullName, Length | Out-String -Width 300 | Write-Host
