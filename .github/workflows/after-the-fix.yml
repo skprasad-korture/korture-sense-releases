@@ -1,0 +1,83 @@
+# Session 138, 30 October 2026. Two questions on GitHub's free Windows machine,
+# with the public installer only:
+# 1. With the home folder set (the 0.1.112 fix for the store's path), does a
+#    reading run past "Finding your work" on a PC?
+# 2. When Sense is the window in front and the sign-in opens Claude's page
+#    from the background, which window is in front after?
+name: after the fix
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Windows release to install
+        default: "0.1.111"
+permissions:
+  contents: read
+jobs:
+  pc:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Install Sense, Claude Code and Codex the normal way
+        shell: pwsh
+        run: |
+          Invoke-WebRequest "https://github.com/skprasad-korture/korture-sense-releases/releases/download/windows-v${{ inputs.version }}/Korture-Sense-Setup.exe" -OutFile setup.exe
+          Start-Process .\setup.exe -ArgumentList '/S' -Wait
+          irm https://claude.ai/install.ps1 | iex *> $null
+          npm install -g @openai/codex *> $null
+          "$env:USERPROFILE\.local\bin" | Out-File -Append $env:GITHUB_PATH
+      - name: Which window is in front after Sign in
+        shell: pwsh
+        run: |
+          Add-Type -Namespace W -Name U -MemberDefinition @'
+          [DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();
+          [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(System.IntPtr h, out int pid);
+          [DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h);
+          '@
+          function Front { $h = [W.U]::GetForegroundWindow(); $id = 0; [void][W.U]::GetWindowThreadProcessId($h, [ref]$id); (Get-Process -Id $id -ErrorAction SilentlyContinue).ProcessName }
+          $dir = Join-Path $env:LOCALAPPDATA 'Korture Sense'
+          Start-Process (Join-Path $dir 'korture.exe')
+          Start-Sleep -Seconds 20
+          $w = Get-Process korture -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+          if ($w) { [void][W.U]::SetForegroundWindow($w.MainWindowHandle) }
+          Start-Sleep -Seconds 2
+          Write-Host "in front before Sign in: $(Front)"
+          & (Join-Path $dir 'runtime\node.exe') (Join-Path $dir 'runtime\bin\korture.mjs') get-ready claude
+          Start-Sleep -Seconds 15
+          Write-Host "in front after Sign in: $(Front)"
+          Get-Process msedge -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object Id, MainWindowTitle | Out-String | Write-Host
+      - name: The reading with the home folder set, three runs a minute apart
+        shell: pwsh
+        run: |
+          $env:HOME = $env:USERPROFILE
+          $dir = Join-Path $env:LOCALAPPDATA 'Korture Sense'
+          $home2 = Join-Path $env:USERPROFILE '.korture'
+          New-Item -ItemType Directory -Force (Join-Path $home2 'sense') | Out-Null
+          '{"allowance":"little"}' | Set-Content (Join-Path $home2 'sense\settings.json')
+          $c = Join-Path $env:USERPROFILE '.claude\projects\C--work-app'
+          New-Item -ItemType Directory -Force $c | Out-Null
+          $now = (Get-Date).ToUniversalTime()
+          $lines = @(
+            (@{ type = 'user'; uuid = 'u1'; sessionId = 's1'; cwd = 'C:\work\app'; timestamp = $now.AddMinutes(-30).ToString('o'); message = @{ role = 'user'; content = 'make the tray icon open the panel, and tell me what you changed' } } | ConvertTo-Json -Compress -Depth 5),
+            (@{ type = 'assistant'; uuid = 'a1'; sessionId = 's1'; timestamp = $now.AddMinutes(-29).ToString('o'); message = @{ role = 'assistant'; content = @(@{ type = 'text'; text = 'Done.' }) } } | ConvertTo-Json -Compress -Depth 5),
+            (@{ type = 'user'; uuid = 'u2'; sessionId = 's1'; cwd = 'C:\work\app'; timestamp = $now.AddMinutes(-20).ToString('o'); message = @{ role = 'user'; content = 'now check it works on a small screen before you say it is done' } } | ConvertTo-Json -Compress -Depth 5)
+          )
+          [IO.File]::WriteAllLines((Join-Path $c 'chat-1.jsonl'), $lines)
+          Copy-Item (Join-Path $dir 'runtime') (Join-Path $home2 'runtime') -Recurse
+          $rt = Join-Path $home2 'runtime'; $node = Join-Path $rt 'node.exe'; $k = Join-Path $rt 'bin\korture.mjs'
+          & $node $k install --no-app --reader codex *> (Join-Path $home2 'setup.log')
+          schtasks /End /TN "Korture Sense\com.korture.ai-reader" *> $null
+          schtasks /Change /TN "Korture Sense\com.korture.ai-reader" /DISABLE *> $null
+          foreach ($i in 1..3) {
+            Write-Host "== run $i"
+            & $node $k read 2>&1 | Select-Object -Last 6 | Write-Host
+            Write-Host "progress: $(Get-Content (Join-Path $home2 'sense\progress.json') -Raw -ErrorAction SilentlyContinue)"
+            Start-Sleep -Seconds 20
+          }
+          foreach ($f in 'sense\current.json','sense\presence.json','sense\health.json','sense\reading.md') { $p = Join-Path $home2 $f; Write-Host "== $f $(if (Test-Path $p) { (Get-Content $p -Raw).Substring(0, [Math]::Min(700, (Get-Content $p -Raw).Length)) } else { 'missing' })" }
+          Set-Content probe.mjs @'
+          import { DatabaseSync } from "node:sqlite";
+          const db = new DatabaseSync(process.argv[2]);
+          for (const r of db.prepare("SELECT key, substr(value, 1, 600) AS v FROM state WHERE key LIKE '%fault%' OR key LIKE '%refresh%' OR key LIKE '%health%' OR key LIKE '%cooldown%'").all()) console.log(r.key, r.v);
+          '@
+          & $node probe.mjs (Join-Path $home2 'korture.db') 2>&1 | Write-Host
