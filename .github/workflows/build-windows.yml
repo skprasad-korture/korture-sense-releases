@@ -43,9 +43,10 @@ jobs:
           (cd src && git log -1 --format='%h %s' && npm ci && cd app && npx tauri build --bundles nsis) > "$log" 2>&1
           code=$?
           exe=$(ls src/app/src-tauri/target/release/bundle/nsis/*.exe 2>/dev/null | head -1)
-          gh release create "build-${{ github.run_id }}" --draft --title "Windows build, run ${{ github.run_id }}" --notes "Private build of ${{ inputs.ref }}." "$log" ${exe:+"$exe"} > /dev/null
-          echo "build exit $code, installer: ${exe:+yes}"
-          [ $code -eq 0 ] && [ -n "$exe" ]
+          gh release create "build-${{ github.run_id }}" -R "${{ github.repository }}" --draft --title "Windows build, run ${{ github.run_id }}" --notes "Private build of ${{ inputs.ref }}." "$log" ${exe:+"$exe"} > /dev/null
+          kept=$?
+          echo "build exit $code, installer: ${exe:+yes}, kept on the draft: $([ $kept -eq 0 ] && echo yes || echo no)"
+          [ $code -eq 0 ] && [ -n "$exe" ] && [ $kept -eq 0 ]
       - name: The new installer, installed for this person only
         shell: pwsh
         run: |
