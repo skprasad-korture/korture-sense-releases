@@ -1,0 +1,80 @@
+# Session 140, 1 November 2026: does a Windows copy update itself with no click?
+# The source is built here with an older version number, every build line kept
+# on a draft release, then installed and left alone. It must find the public
+# version, install it and come back on it by itself.
+name: self update on a pc
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit of korture-ai-human to build
+        default: main
+      older:
+        description: The version number this test build says it is
+        default: "0.1.112"
+permissions:
+  contents: write
+jobs:
+  pc:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          repository: skprasad-korture/korture-ai-human
+          ref: ${{ inputs.ref }}
+          ssh-key: ${{ secrets.SOURCE_KEY }}
+          path: src
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build with an older number, every line kept private
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OLDER: ${{ inputs.older }}
+        run: |
+          set +e
+          log="$RUNNER_TEMP/build.log"
+          sed -i -E "s/\"version\": \"[0-9.]+\"/\"version\": \"$OLDER\"/" src/app/src-tauri/tauri.conf.json
+          sed -i -E "0,/^version = \"[0-9.]+\"/s//version = \"$OLDER\"/" src/app/src-tauri/Cargo.toml
+          (cd src && npm ci && cd app && npx tauri build --bundles nsis) > "$log" 2>&1
+          code=$?
+          gh release create "selfupdate-${{ github.run_id }}" -R "${{ github.repository }}" --draft --title "self update test, run ${{ github.run_id }}" --notes "build log" "$log" > /dev/null 2>&1
+          echo "build exit $code"
+          [ $code -eq 0 ]
+      - name: Install it, then leave it alone
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem src/app/src-tauri/target/release/bundle/nsis -Filter *.exe | Select-Object -First 1
+          Start-Process $exe.FullName -ArgumentList '/S' -Wait
+          Remove-Item -Recurse -Force src
+          $home2 = Join-Path $env:USERPROFILE '.korture'
+          New-Item -ItemType Directory -Force $home2 | Out-Null
+          [IO.File]::WriteAllText((Join-Path $home2 'config.json'), '{"pings":false}')
+          [IO.File]::WriteAllText((Join-Path $home2 'updated.json'), '{}')
+          $dir = Join-Path $env:LOCALAPPDATA 'Korture Sense'
+          $app = Get-ChildItem $dir -Filter *.exe | Where-Object Name -notmatch 'uninstall' | Select-Object -First 1
+          Write-Host "program: $($app.FullName), version on disk: $($app.VersionInfo.ProductVersion)"
+          Start-Process $app.FullName
+          $was = ''
+          foreach ($i in 1..40) {
+            Start-Sleep -Seconds 15
+            $f = Join-Path $home2 'update-state.json'
+            $now = if (Test-Path $f) { Get-Content $f -Raw } else { '' }
+            if ($now -ne $was) { Write-Host "$(Get-Date -Format HH:mm:ss) $now"; $was = $now }
+            if ($now -and (($now | ConvertFrom-Json).version -ne '${{ inputs.older }}')) { break }
+          }
+          $u = Join-Path $home2 'update.log'
+          Write-Host '== update.log'; if (Test-Path $u) { Get-Content $u | Write-Host }
+          $app2 = Get-ChildItem $dir -Filter *.exe | Where-Object Name -notmatch 'uninstall' | Select-Object -First 1
+          Write-Host "version on disk now: $($app2.VersionInfo.ProductVersion)"
+          Get-Process | Where-Object { $_.Path -like "$dir*" } | ForEach-Object { Write-Host "running: $($_.Path) $($_.StartTime)" }
+          $v = (Get-Content (Join-Path $home2 'update-state.json') -Raw | ConvertFrom-Json).version
+          if ($v -eq '${{ inputs.older }}') { Write-Host 'FAILED: it did not update itself'; exit 1 }
+          Write-Host "PASSED: it updated itself to $v with no click"
