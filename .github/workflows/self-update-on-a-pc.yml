@@ -70,6 +70,11 @@ jobs:
             if ($now -ne $was) { Write-Host "$(Get-Date -Format HH:mm:ss) $now"; $was = $now }
             if ($now -and (($now | ConvertFrom-Json).version -ne '${{ inputs.older }}')) { break }
           }
+          Start-Sleep -Seconds 130
+          $disk = Get-ChildItem $dir -Filter *.exe | Where-Object Name -notmatch 'uninstall' | Select-Object -First 1
+          Write-Host "before the minute task: $(@(Get-Process | Where-Object { $_.Path -like "$dir*" }).Count) running, note: $(Test-Path (Join-Path $home2 'updating.json'))"
+          & $disk.FullName --agent "$env:SystemRoot\System32\cmd.exe" /c exit
+          Start-Sleep -Seconds 45
           $u = Join-Path $home2 'update.log'
           Write-Host '== update.log'; if (Test-Path $u) { Get-Content $u | Write-Host }
           $app2 = Get-ChildItem $dir -Filter *.exe | Where-Object Name -notmatch 'uninstall' | Select-Object -First 1
