@@ -76,6 +76,16 @@ jobs:
           $p = Get-Process korture -ErrorAction SilentlyContinue
           Write-Host "app running: $([bool]$p) from $($p.Path | Select-Object -First 1)"
           Write-Host "windows: $(($p | Where-Object MainWindowTitle | ForEach-Object MainWindowTitle) -join ', ')"
+          # Store screenshots: 1366 x 768 or larger.
+          try { Set-DisplayResolution -Width 1920 -Height 1080 -Force -ErrorAction Stop } catch { Write-Host "resolution: $($_.Exception.Message)" }
+          Start-Sleep -Seconds 5
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\shots" | Out-Null
+          $bnd = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $bnd.Width, $bnd.Height
+          [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($bnd.Location, [System.Drawing.Point]::Empty, $bnd.Size)
+          $bmp.Save("$env:RUNNER_TEMP\shots\first-open.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          Write-Host "screen: $($bnd.Width) x $($bnd.Height)"
           $us = Join-Path $env:USERPROFILE '.korture\update-state.json'
           Write-Host "update-state: $(if (Test-Path $us) { Get-Content $us -Raw } else { 'missing' })"
       - name: An AI on the PC, as a person has
@@ -112,3 +122,13 @@ jobs:
           schtasks /Query /TN "Korture Sense\com.korture.ai-reader" /V /FO LIST | Select-String 'Last Run|Last Result' | Out-String | Write-Host
           $p = Get-Process korture -ErrorAction SilentlyContinue
           Write-Host "app still running: $([bool]$p)"
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $bnd = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $bnd.Width, $bnd.Height
+          [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($bnd.Location, [System.Drawing.Point]::Empty, $bnd.Size)
+          $bmp.Save("$env:RUNNER_TEMP\shots\after-setup.png", [System.Drawing.Imaging.ImageFormat]::Png)
+      - name: Keep the screenshots on the draft release
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "store-${{ github.run_id }}" -R "${{ github.repository }}" "$RUNNER_TEMP"/shots/*.png --clobber && echo shots kept
