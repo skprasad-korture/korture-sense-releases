@@ -78,6 +78,12 @@ jobs:
           Write-Host "windows: $(($p | Where-Object MainWindowTitle | ForEach-Object MainWindowTitle) -join ', ')"
           $us = Join-Path $env:USERPROFILE '.korture\update-state.json'
           Write-Host "update-state: $(if (Test-Path $us) { Get-Content $us -Raw } else { 'missing' })"
+      - name: An AI on the PC, as a person has
+        shell: pwsh
+        run: |
+          irm https://claude.ai/install.ps1 | iex *> $null
+          npm install -g @openai/codex *> $null
+          "$env:USERPROFILE\.local\bin" | Out-File -Append $env:GITHUB_PATH
       - name: The welcome click, inside the package, then the first day
         shell: pwsh
         run: |
