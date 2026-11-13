@@ -1,0 +1,108 @@
+# Session 158, 13 November 2026: the Microsoft Store copy of Korture Sense.
+# Built here on GitHub's free Windows machine, like `build windows`. The
+# source is checked out with the read-only key and never kept: the build's
+# lines go to a draft release (seen only by the owner), with the unsigned
+# .msix that Partner Center takes. Then the package is signed with a
+# throwaway certificate, installed and opened on this machine the way the
+# Store would install it, and its first day is checked.
+name: build windows store
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit of korture-ai-human to build
+        default: main
+      name:
+        description: Package identity name from Partner Center (empty for a test)
+        default: ""
+      publisher:
+        description: Package publisher from Partner Center, CN=... (empty for a test)
+        default: ""
+      publisher_name:
+        description: Publisher display name from Partner Center
+        default: "Korture"
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          repository: skprasad-korture/korture-ai-human
+          ref: ${{ inputs.ref }}
+          ssh-key: ${{ secrets.SOURCE_KEY }}
+          path: src
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build the Store program, every line kept private
+        env:
+          KORTURE_STORE: "1"
+        run: |
+          set +e
+          log="$RUNNER_TEMP/build.log"
+          (cd src && git log -1 --format='%h %s' && npm ci && cd app && npx tauri build --no-bundle) > "$log" 2>&1
+          code=$?
+          echo "build exit $code"
+          cp "$log" "$RUNNER_TEMP/keep-build.log"
+          [ $code -eq 0 ]
+      - name: Pack the Store package
+        shell: pwsh
+        run: |
+          $a = @{ Out = "$env:RUNNER_TEMP\store" }
+          if ("${{ inputs.name }}") { $a.Name = "${{ inputs.name }}"; $a.Publisher = "${{ inputs.publisher }}"; $a.PublisherName = "${{ inputs.publisher_name }}" }
+          & src/app/scripts/store-msix.ps1 @a
+      - name: Keep the package and the build lines on a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "store-${{ github.run_id }}" -R "${{ github.repository }}" --draft --title "Windows Store package, run ${{ github.run_id }}" --notes "Private build of ${{ inputs.ref }} for Partner Center." "$RUNNER_TEMP/keep-build.log" "$RUNNER_TEMP"/store/*.msix > /dev/null && echo kept
+      - name: Install it the way the Store would, and open it
+        shell: pwsh
+        run: |
+          & src/app/scripts/store-msix.ps1 -Out "$env:RUNNER_TEMP\store-test" -Test
+          Remove-Item -Recurse -Force src
+          $pkg = Get-AppxPackage -Name 'KortureSense.Test'
+          Start-Process "shell:AppsFolder\$($pkg.PackageFamilyName)!KortureSense"
+          Start-Sleep -Seconds 25
+          $p = Get-Process korture -ErrorAction SilentlyContinue
+          Write-Host "app running: $([bool]$p) from $($p.Path | Select-Object -First 1)"
+          Write-Host "windows: $(($p | Where-Object MainWindowTitle | ForEach-Object MainWindowTitle) -join ', ')"
+          $us = Join-Path $env:USERPROFILE '.korture\update-state.json'
+          Write-Host "update-state: $(if (Test-Path $us) { Get-Content $us -Raw } else { 'missing' })"
+      - name: The welcome click, inside the package, then the first day
+        shell: pwsh
+        run: |
+          $pkg = Get-AppxPackage -Name 'KortureSense.Test'
+          $home2 = Join-Path $env:USERPROFILE '.korture'
+          $rt = Join-Path $home2 'runtime'
+          New-Item -ItemType Directory -Force (Join-Path $home2 'sense') | Out-Null
+          '{"allowance":"little"}' | Set-Content (Join-Path $home2 'sense\settings.json')
+          # What the app does on the welcome click: copy its runtime to the person's folder, then set up from there. Run inside the package.
+          $from = Join-Path $pkg.InstallLocation 'runtime'
+          Invoke-CommandInDesktopPackage -PackageFamilyName $pkg.PackageFamilyName -AppId KortureSense -Command 'cmd.exe' -Args "/c robocopy `"$from`" `"$rt`" /E /NFL /NDL /NJH /NJS & `"$rt\node.exe`" `"$rt\bin\korture.mjs`" install --no-app --reader codex > `"$home2\setup.log`" 2>&1"
+          Start-Sleep -Seconds 60
+          Write-Host "runtime placed in the person's folder: $(Test-Path (Join-Path $rt 'node.exe'))"
+          Write-Host "setup log: $(if (Test-Path "$home2\setup.log") { (Get-Content "$home2\setup.log" -Raw).Substring(0, [Math]::Min(600, (Get-Content "$home2\setup.log" -Raw).Length)) } else { 'missing' })"
+          schtasks /Query /TN "Korture Sense\com.korture.ai-reader" /V /FO LIST | Select-String 'Task To Run|Last Run|Last Result' | Out-String | Write-Host
+          $c = Join-Path $env:USERPROFILE '.claude\projects\C--work-app'
+          New-Item -ItemType Directory -Force $c | Out-Null
+          $now = (Get-Date).ToUniversalTime()
+          $lines = @(
+            (@{ type = 'user'; uuid = 'u1'; sessionId = 's1'; cwd = 'C:\work\app'; timestamp = $now.AddMinutes(-30).ToString('o'); message = @{ role = 'user'; content = 'make the tray icon open the panel, and tell me what you changed' } } | ConvertTo-Json -Compress -Depth 5),
+            (@{ type = 'assistant'; uuid = 'a1'; sessionId = 's1'; timestamp = $now.AddMinutes(-29).ToString('o'); message = @{ role = 'assistant'; content = @(@{ type = 'text'; text = 'Done.' }) } } | ConvertTo-Json -Compress -Depth 5)
+          )
+          [IO.File]::WriteAllLines((Join-Path $c 'chat-1.jsonl'), $lines)
+          Start-Sleep -Seconds 120
+          Write-Host "== progress: $(if (Test-Path "$home2\sense\progress.json") { Get-Content "$home2\sense\progress.json" -Raw } else { 'missing' })"
+          schtasks /Query /TN "Korture Sense\com.korture.ai-reader" /V /FO LIST | Select-String 'Last Run|Last Result' | Out-String | Write-Host
+          $p = Get-Process korture -ErrorAction SilentlyContinue
+          Write-Host "app still running: $([bool]$p)"
