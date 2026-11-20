@@ -92,6 +92,27 @@ jobs:
           Start-Process $exe; Start-Sleep -Seconds 25
           Say 'E. closed, then one click (want 1 copy, the window)'; Shot 'e-first-click'
 
+          # The glance: click the bee the way a person does (in the hidden icons if it is there).
+          Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+          Add-Type -Namespace W -Name M -MemberDefinition @'
+          [DllImport("user32.dll")] public static extern void mouse_event(int f, int x, int y, int d, int e);
+          [DllImport("user32.dll")] public static extern bool IsWindowVisible(System.IntPtr h);
+          '@
+          $A = [System.Windows.Automation.AutomationElement]; $T = [System.Windows.Automation.TreeScope]
+          function Click($x, $y) { [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point $x, $y; Start-Sleep -Milliseconds 300; [W.M]::mouse_event(2, 0, 0, 0, 0); [W.M]::mouse_event(4, 0, 0, 0, 0) }
+          function Named($like) { $A::RootElement.FindAll($T::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object { try { $_.Current.Name -like $like } catch { $false } } | Select-Object -First 1 }
+          function ClickEl($e) { $r = $e.Current.BoundingRectangle; Click ([int]($r.X + $r.Width / 2)) ([int]($r.Y + $r.Height / 2)) }
+          function Bee { $b = Named 'Korture Sense*'; if (-not $b -or $b.Current.BoundingRectangle.Width -eq 0) { $h = Named 'Show Hidden Icons*'; if ($h) { ClickEl $h; Start-Sleep -Seconds 2 }; $b = Named 'Korture Sense*' }; Write-Host "bee found: $([bool]$b) at $(if ($b) { $b.Current.BoundingRectangle })"; if ($b) { ClickEl $b } }
+          function Glance { $pids = @(Get-Process korture).Id; $A::RootElement.FindAll($T::Children, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object { $pids -contains $_.Current.ProcessId -and $_.Current.Name -eq 'Korture' } | Where-Object { [W.M]::IsWindowVisible([System.IntPtr]$_.Current.NativeWindowHandle) } | Select-Object -First 1 }
+          function SayGlance($what) { $g = Glance; $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea; if ($g) { $r = $g.Current.BoundingRectangle; $in = ($r.Left -ge $wa.Left) -and ($r.Top -ge $wa.Top) -and ($r.Right -le $wa.Right) -and ($r.Bottom -le $wa.Bottom); Write-Host "$what | glance: shown at $r | screen above the taskbar: $wa | whole glance on screen: $in" } else { Write-Host "$what | glance: not shown" } }
+          $w = Window; if ($w) { [void][W.U]::ShowWindow($w.MainWindowHandle, 0) }; Start-Sleep -Seconds 2
+          Bee; Start-Sleep -Seconds 6
+          SayGlance 'F. click on the bee (want the whole glance on screen)'; Shot 'f-glance'
+          Bee; Start-Sleep -Seconds 3
+          SayGlance 'G. click on the bee again (want not shown)'
+          Bee; Start-Sleep -Seconds 4
+          SayGlance 'H. and once more (want shown, whole)'; Shot 'h-glance-again'
+
           $run = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue
           $run.PSObject.Properties | Where-Object { $_.Value -match 'korture' } | ForEach-Object { Write-Host "Run key: $($_.Name) = $($_.Value)" }
       - name: Keep the photos on the draft
