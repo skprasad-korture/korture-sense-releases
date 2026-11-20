@@ -1,0 +1,120 @@
+# Session 175, 20 November 2026: Shishir's PC runs five copies of the public
+# Sense (0.1.141 has no one-copy guard). This installs the public version,
+# starts it five times, then updates it the way the app's updater does
+# (installer /P /UPDATE /R /ARGS), with one installer (the usual case) and
+# with five at once (every copy found the update together). It counts the
+# copies and windows after, and keeps photos on a private draft release only.
+name: old copies update on a pc
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit of korture-ai-human to build (full sha)
+        required: true
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DRAFT: check-${{ github.run_id }}
+    steps:
+      - run: git config --global core.autocrlf false
+        shell: bash
+      - uses: actions/checkout@v4
+        with:
+          repository: skprasad-korture/korture-ai-human
+          ref: ${{ inputs.ref }}
+          ssh-key: ${{ secrets.SOURCE_KEY }}
+          path: src
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build as 0.1.199 so the new one is plain to see, every line kept private
+        shell: bash
+        run: |
+          set +e
+          log="$RUNNER_TEMP/build.log"
+          sed -i 's/"version": "0.1.[0-9]*"/"version": "0.1.199"/' src/app/src-tauri/tauri.conf.json
+          (cd src && git log -1 --format='%h %s' && npm ci && cd app && npx tauri build --bundles nsis) > "$log" 2>&1
+          code=$?
+          exe=$(ls src/app/src-tauri/target/release/bundle/nsis/*.exe 2>/dev/null | head -1)
+          gh release create "$DRAFT" -R "${{ github.repository }}" --draft --title "Old copies update check, run ${{ github.run_id }}" --notes "Private check of ${{ inputs.ref }}." "$log" > /dev/null
+          echo "build exit $code, installer: ${exe:+yes}"
+          [ $code -eq 0 ] && [ -n "$exe" ] && cp "$exe" new-setup.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: new-setup
+          path: new-setup.exe
+          retention-days: 1
+  update:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        installers: [1, 5]
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DRAFT: check-${{ github.run_id }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: new-setup
+      - name: Install the public 0.1.141, start it five times, update it
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          Add-Type -Namespace W -Name G -MemberDefinition @'
+          [DllImport("user32.dll")] public static extern System.IntPtr GetDC(System.IntPtr h);
+          [DllImport("user32.dll")] public static extern int ReleaseDC(System.IntPtr h, System.IntPtr dc);
+          [DllImport("gdi32.dll")] public static extern bool BitBlt(System.IntPtr d, int x, int y, int w, int h, System.IntPtr s, int sx, int sy, int op);
+          [DllImport("user32.dll")] public static extern bool IsWindowVisible(System.IntPtr h);
+          '@
+          $n = ${{ matrix.installers }}
+          New-Item -ItemType Directory -Force seen | Out-Null
+          function Shot($name) {
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $to = $g.GetHdc(); $from = [W.G]::GetDC([System.IntPtr]::Zero)
+            [void][W.G]::BitBlt($to, 0, 0, $b.Width, $b.Height, $from, $b.X, $b.Y, 0x40CC0020)
+            [void][W.G]::ReleaseDC([System.IntPtr]::Zero, $from); $g.ReleaseHdc($to)
+            $bmp.Save("seen\$n-installers-$name.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          }
+          Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+          $A = [System.Windows.Automation.AutomationElement]; $T = [System.Windows.Automation.TreeScope]
+          function Windows { $pids = @(Get-Process korture -ErrorAction SilentlyContinue).Id; @($A::RootElement.FindAll($T::Children, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object { $pids -contains $_.Current.ProcessId -and $_.Current.Name -eq 'KORTURE.ai Sense' -and [W.G]::IsWindowVisible([System.IntPtr]$_.Current.NativeWindowHandle) }).Count }
+          function Copies { @(Get-CimInstance Win32_Process -Filter "Name='korture.exe'" | Where-Object { $_.CommandLine -notmatch '--agent|--update-only' }) }
+          $exe = Join-Path $env:LOCALAPPDATA 'Korture Sense\korture.exe'
+          function Say($what) { $c = Copies; Write-Host "$what | copies: $($c.Count) | version on disk: $((Get-Item $exe -ErrorAction SilentlyContinue).VersionInfo.ProductVersion) | Sense windows shown: $(Windows)"; $c | ForEach-Object { Write-Host "   pid $($_.ProcessId): $($_.CommandLine)" } }
+
+          gh release download windows-v0.1.141 -R "${{ github.repository }}" -p Korture-Sense-Setup.exe -D old
+          Start-Process old\Korture-Sense-Setup.exe -ArgumentList '/S' -Wait
+          Get-Process korture -ErrorAction SilentlyContinue | Stop-Process -Force
+          1..5 | ForEach-Object { Start-Process $exe; Start-Sleep -Seconds 5 }
+          Start-Sleep -Seconds 25
+          Say "A. public 0.1.141 started five times, as on Shishir's PC (want 5 copies)"; Shot 'a-five-old'
+
+          # The updater runs the installer like this, then the copy that ran it exits.
+          $how = '/P /UPDATE /R /ARGS'
+          $runs = 1..$n | ForEach-Object { Start-Process (Resolve-Path new-setup.exe) -ArgumentList $how -PassThru }
+          $runs | ForEach-Object { $_.WaitForExit(240000) | Out-Null; Write-Host "installer $($_.Id) ended with $($_.ExitCode)" }
+          Start-Sleep -Seconds 30
+          Say "B. after $n installer(s) (want 1 copy, version 0.1.199, no Sense window)"; Shot 'b-after-update'
+          Start-Sleep -Seconds 60
+          Say "C. a minute later (want the same)"
+
+          Start-Process $exe; Start-Sleep -Seconds 10
+          Say "D. a click on Sense (want 1 copy, 1 Sense window)"; Shot 'd-click'
+          $log = Join-Path $env:USERPROFILE '.korture\update.log'
+          Write-Host '== update.log'; Get-Content $log -Tail 20 -ErrorAction SilentlyContinue | Write-Host
+      - name: Keep the photos on the draft
+        if: always()
+        shell: bash
+        run: gh release upload "$DRAFT" -R "${{ github.repository }}" seen/* --clobber > /dev/null && echo kept
