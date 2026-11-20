@@ -101,10 +101,14 @@ jobs:
           Start-Sleep -Seconds 25
           Say "A. public 0.1.141 started five times, as on Shishir's PC (want 5 copies)"; Shot 'a-five-old'
 
+          # Before it runs the installer, 0.1.141 writes this note, so the new Sense starts quiet.
+          New-Item -ItemType Directory -Force (Join-Path $env:USERPROFILE '.korture') | Out-Null
+          Set-Content (Join-Path $env:USERPROFILE '.korture\restart-for-update') ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
           # The updater runs the installer like this, then the copy that ran it exits.
           $how = '/P /UPDATE /R /ARGS'
           $runs = 1..$n | ForEach-Object { Start-Process (Resolve-Path new-setup.exe) -ArgumentList $how -PassThru }
-          $runs | ForEach-Object { $_.WaitForExit(240000) | Out-Null; Write-Host "installer $($_.Id) ended with $($_.ExitCode)" }
+          $runs | ForEach-Object { $_.WaitForExit(240000) | Out-Null; Write-Host "installer $($_.Id) ended: $($_.HasExited) $($_.ExitCode)" }
+          Write-Host "installers still open: $(@(Get-Process | Where-Object { $_.Path -like '*new-setup*' }).Count)"
           Start-Sleep -Seconds 30
           Say "B. after $n installer(s) (want 1 copy, version 0.1.199, no Sense window)"; Shot 'b-after-update'
           Start-Sleep -Seconds 60
