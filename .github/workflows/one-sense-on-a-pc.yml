@@ -1,0 +1,100 @@
+# Session 175, 20 November 2026: Shishir's PC ran five copies of Sense (five
+# bees), and a click on Sense in Start opened no window. This builds a commit,
+# installs it, and starts it the ways a person does: at sign-in, by a click
+# while it runs, many clicks, a click while its window is minimized. It counts
+# the copies and keeps photos and the build log on a draft release only.
+name: one sense on a pc
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit of korture-ai-human to build
+        default: main
+permissions:
+  contents: write
+jobs:
+  pc:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DRAFT: check-${{ github.run_id }}
+    steps:
+      - run: git config --global core.autocrlf false
+        shell: bash
+      - uses: actions/checkout@v4
+        with:
+          repository: skprasad-korture/korture-ai-human
+          ref: ${{ inputs.ref }}
+          ssh-key: ${{ secrets.SOURCE_KEY }}
+          path: src
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build, every line kept private
+        shell: bash
+        run: |
+          set +e
+          log="$RUNNER_TEMP/build.log"
+          (cd src && git log -1 --format='%h %s' && npm ci && cd app && npx tauri build --bundles nsis) > "$log" 2>&1
+          code=$?
+          exe=$(ls src/app/src-tauri/target/release/bundle/nsis/*.exe 2>/dev/null | head -1)
+          gh release create "$DRAFT" -R "${{ github.repository }}" --draft --title "One Sense check, run ${{ github.run_id }}" --notes "Private check of ${{ inputs.ref }}." "$log" > /dev/null
+          echo "build exit $code, installer: ${exe:+yes}"
+          [ $code -eq 0 ] && [ -n "$exe" ]
+      - name: Install for this person only
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem src/app/src-tauri/target/release/bundle/nsis -Filter *.exe | Select-Object -First 1
+          Start-Process $exe.FullName -ArgumentList '/S' -Wait
+          Remove-Item -Recurse -Force src
+          Get-Process korture -ErrorAction SilentlyContinue | Stop-Process -Force
+      - name: Start Sense the ways a person does
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          Add-Type -Namespace W -Name U -MemberDefinition @'
+          [DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();
+          [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(System.IntPtr h, out int pid);
+          [DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr h, int cmd);
+          [DllImport("user32.dll")] public static extern bool IsIconic(System.IntPtr h);
+          '@
+          New-Item -ItemType Directory -Force seen | Out-Null
+          function Shot($name) {
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            $bmp.Save("seen\$name.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          }
+          function Copies { @(Get-CimInstance Win32_Process -Filter "Name='korture.exe'" | Where-Object { $_.CommandLine -notmatch '--agent|--update-only' }).Count }
+          function Window { Get-Process korture -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle } | Select-Object -First 1 }
+          function Front { $h = [W.U]::GetForegroundWindow(); $id = 0; [void][W.U]::GetWindowThreadProcessId($h, [ref]$id); (Get-Process -Id $id -ErrorAction SilentlyContinue).ProcessName }
+          function Say($what) { $w = Window; Write-Host "$what | copies: $(Copies) | window: $(if ($w) { $w.MainWindowTitle } else { 'none' }) | in front: $(Front)" }
+          $exe = Join-Path $env:LOCALAPPDATA 'Korture Sense\korture.exe'
+
+          Start-Process $exe -ArgumentList '--at-login'; Start-Sleep -Seconds 25
+          Say 'A. start at sign-in (want 1 copy, no window)'; Shot 'a-sign-in'
+
+          Start-Process $exe; Start-Sleep -Seconds 10
+          Say 'B. a click on Sense while it runs (want 1 copy, the window in front)'; Shot 'b-click-while-running'
+
+          1..3 | ForEach-Object { Start-Process $exe; Start-Sleep -Seconds 4 }; Start-Sleep -Seconds 6
+          Say 'C. three more clicks (want 1 copy)'
+
+          $w = Window; if ($w) { [void][W.U]::ShowWindow($w.MainWindowHandle, 6) }; Start-Sleep -Seconds 3
+          Start-Process $exe; Start-Sleep -Seconds 8
+          $w = Window; Say "D. a click while the window is minimized (want not minimized: $(if ($w) { -not [W.U]::IsIconic($w.MainWindowHandle) } else { 'no window' }))"; Shot 'd-click-while-minimized'
+
+          Get-Process korture -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Seconds 3
+          Start-Process $exe; Start-Sleep -Seconds 25
+          Say 'E. closed, then one click (want 1 copy, the window)'; Shot 'e-first-click'
+
+          $run = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue
+          $run.PSObject.Properties | Where-Object { $_.Value -match 'korture' } | ForEach-Object { Write-Host "Run key: $($_.Name) = $($_.Value)" }
+      - name: Keep the photos on the draft
+        if: always()
+        shell: bash
+        run: gh release upload "$DRAFT" -R "${{ github.repository }}" seen/*.png --clobber > /dev/null && echo kept
