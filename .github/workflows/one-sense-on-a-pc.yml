@@ -66,7 +66,7 @@ jobs:
             $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
             $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
             $g = [System.Drawing.Graphics]::FromImage($bmp)
-            $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size, ([System.Drawing.CopyPixelOperation]::SourceCopy -bor [System.Drawing.CopyPixelOperation]::CaptureBlt))
             $bmp.Save("seen\$name.png", [System.Drawing.Imaging.ImageFormat]::Png)
           }
           function Copies { @(Get-CimInstance Win32_Process -Filter "Name='korture.exe'" | Where-Object { $_.CommandLine -notmatch '--agent|--update-only' }).Count }
@@ -74,6 +74,7 @@ jobs:
           function Front { $h = [W.U]::GetForegroundWindow(); $id = 0; [void][W.U]::GetWindowThreadProcessId($h, [ref]$id); (Get-Process -Id $id -ErrorAction SilentlyContinue).ProcessName }
           function Say($what) { $w = Window; Write-Host "$what | copies: $(Copies) | window: $(if ($w) { $w.MainWindowTitle } else { 'none' }) | in front: $(Front)" }
           $exe = Join-Path $env:LOCALAPPDATA 'Korture Sense\korture.exe'
+          $env:KORTURE_TRAY_LOG = Join-Path $PWD 'seen\tray.log'
 
           Start-Process $exe -ArgumentList '--at-login'; Start-Sleep -Seconds 25
           Say 'A. start at sign-in (want 1 copy, no window)'; Shot 'a-sign-in'
@@ -102,16 +103,17 @@ jobs:
           function Click($x, $y) { [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point $x, $y; Start-Sleep -Milliseconds 300; [W.M]::mouse_event(2, 0, 0, 0, 0); [W.M]::mouse_event(4, 0, 0, 0, 0) }
           function Named($like) { $A::RootElement.FindAll($T::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object { try { $_.Current.Name -like $like } catch { $false } } | Select-Object -First 1 }
           function ClickEl($e) { $r = $e.Current.BoundingRectangle; Click ([int]($r.X + $r.Width / 2)) ([int]($r.Y + $r.Height / 2)) }
-          function Bee { $b = Named 'Korture Sense*'; if (-not $b -or $b.Current.BoundingRectangle.Width -eq 0) { $h = Named 'Show Hidden Icons*'; if ($h) { ClickEl $h; Start-Sleep -Seconds 2 }; $b = Named 'Korture Sense*' }; Write-Host "bee found: $([bool]$b) at $(if ($b) { $b.Current.BoundingRectangle })"; if ($b) { ClickEl $b } }
+          function Bee { $b = Named 'Korture Sense*'; if (-not $b -or $b.Current.BoundingRectangle.Width -eq 0) { $h = Named 'Show Hidden Icons*'; if ($h) { Write-Host 'opened the hidden icons'; ClickEl $h; Start-Sleep -Seconds 2 }; $b = Named 'Korture Sense*' }; Write-Host "bee found: $([bool]$b) at $(if ($b) { $b.Current.BoundingRectangle })"; if ($b) { ClickEl $b } }
           function Glance { $pids = @(Get-Process korture).Id; $A::RootElement.FindAll($T::Children, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object { $pids -contains $_.Current.ProcessId -and $_.Current.Name -eq 'Korture' } | Where-Object { [W.M]::IsWindowVisible([System.IntPtr]$_.Current.NativeWindowHandle) } | Select-Object -First 1 }
           function SayGlance($what) { $g = Glance; $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea; if ($g) { $r = $g.Current.BoundingRectangle; $in = ($r.Left -ge $wa.Left) -and ($r.Top -ge $wa.Top) -and ($r.Right -le $wa.Right) -and ($r.Bottom -le $wa.Bottom); Write-Host "$what | glance: shown at $r | screen above the taskbar: $wa | whole glance on screen: $in" } else { Write-Host "$what | glance: not shown" } }
           $w = Window; if ($w) { [void][W.U]::ShowWindow($w.MainWindowHandle, 0) }; Start-Sleep -Seconds 2
           Bee; Start-Sleep -Seconds 6
-          SayGlance 'F. click on the bee (want the whole glance on screen)'; Shot 'f-glance'
+          SayGlance "F. click on the bee (want the whole glance on screen), in front: $(Front)"; Shot 'f-glance'
           Bee; Start-Sleep -Seconds 3
-          SayGlance 'G. click on the bee again (want not shown)'
+          SayGlance "G. click on the bee again (want not shown), in front: $(Front)"; Shot 'g-glance-closed'
           Bee; Start-Sleep -Seconds 4
-          SayGlance 'H. and once more (want shown, whole)'; Shot 'h-glance-again'
+          SayGlance "H. and once more (want shown, whole), in front: $(Front)"; Shot 'h-glance-again'
+          Write-Host '== the bee and the glance, from the app'; Get-Content $env:KORTURE_TRAY_LOG -ErrorAction SilentlyContinue | Write-Host
 
           $run = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue
           $run.PSObject.Properties | Where-Object { $_.Value -match 'korture' } | ForEach-Object { Write-Host "Run key: $($_.Name) = $($_.Value)" }
