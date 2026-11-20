@@ -60,6 +60,7 @@ jobs:
           [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(System.IntPtr h, out int pid);
           [DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr h, int cmd);
           [DllImport("user32.dll")] public static extern bool IsIconic(System.IntPtr h);
+          [DllImport("user32.dll")] public static extern bool PostMessage(System.IntPtr h, int msg, System.IntPtr w, System.IntPtr l);
           '@
           New-Item -ItemType Directory -Force seen | Out-Null
           Add-Type -Namespace W -Name G -MemberDefinition @'
@@ -114,7 +115,7 @@ jobs:
           function Bee { $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea; $b = Bees | Where-Object { $_.Current.BoundingRectangle.Y -ge $wa.Bottom } | Select-Object -First 1; if (-not $b) { $h = Named 'Show Hidden Icons*'; if ($h) { Write-Host 'opened the hidden icons'; ClickEl $h; Start-Sleep -Seconds 2 }; $b = Bees | Where-Object { $_.Current.BoundingRectangle.Y -lt $wa.Bottom } | Select-Object -First 1 }; Write-Host "bee found: $([bool]$b) at $(if ($b) { $b.Current.BoundingRectangle })"; if ($b) { ClickEl $b } }
           function Glance { $pids = @(Get-Process korture).Id; $A::RootElement.FindAll($T::Children, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object { $pids -contains $_.Current.ProcessId -and $_.Current.Name -eq 'Korture' } | Where-Object { [W.M]::IsWindowVisible([System.IntPtr]$_.Current.NativeWindowHandle) } | Select-Object -First 1 }
           function SayGlance($what) { $g = Glance; $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea; if ($g) { $r = $g.Current.BoundingRectangle; $in = ($r.Left -ge $wa.Left) -and ($r.Top -ge $wa.Top) -and ($r.Right -le $wa.Right) -and ($r.Bottom -le $wa.Bottom); Write-Host "$what | glance: shown at $r | screen above the taskbar: $wa | whole glance on screen: $in" } else { Write-Host "$what | glance: not shown" } }
-          $w = Window; if ($w) { [void][W.U]::ShowWindow($w.MainWindowHandle, 0) }; Start-Sleep -Seconds 2
+          $w = Window; if ($w) { [void][W.U]::PostMessage($w.MainWindowHandle, 0x10, [System.IntPtr]::Zero, [System.IntPtr]::Zero) }; Start-Sleep -Seconds 2
           Bee; Start-Sleep -Seconds 6
           SayGlance "F. click on the bee (want the whole glance on screen), in front: $(Front)"; Shot 'f-glance'
           Click 300 400; Start-Sleep -Seconds 3
@@ -130,7 +131,7 @@ jobs:
           Entries
           Start-Sleep -Seconds 8
           Write-Host "L. the bee line after a while (want gone): $([bool](Named 'Put it on the taskbar*')) $([bool](Named 'Done. The bee*'))"
-          $w = Window; if ($w) { [void][W.U]::ShowWindow($w.MainWindowHandle, 0) }; Start-Sleep -Seconds 2
+          $w = Window; if ($w) { [void][W.U]::PostMessage($w.MainWindowHandle, 0x10, [System.IntPtr]::Zero, [System.IntPtr]::Zero) }; Start-Sleep -Seconds 2
           Start-Sleep -Seconds 4
           $b = Named 'Korture Sense*'; Write-Host "bee now at $(if ($b) { $b.Current.BoundingRectangle })"
           Bee; Start-Sleep -Seconds 4
